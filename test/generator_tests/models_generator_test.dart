@@ -1,11 +1,110 @@
+import 'package:swagger_dart_code_generator/src/extensions/yaml_extensions.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/v2/swagger_models_generator_v2.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/v3/swagger_models_generator_v3.dart';
 import 'package:swagger_dart_code_generator/src/models/generator_options.dart';
 import 'package:swagger_dart_code_generator/src/swagger_models/responses/swagger_schema.dart';
 import 'package:swagger_dart_code_generator/src/swagger_models/swagger_root.dart';
 import 'package:test/test.dart';
+import 'package:yaml/yaml.dart';
 
 import '../code_examples.dart';
+
+const openApiAnyOfResponseJson = '''
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/pets/search": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "PetSearchResponse",
+                  "anyOf": [
+                    { "\$ref": "#/components/schemas/Cat" },
+                    { "\$ref": "#/components/schemas/Dog" }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Cat": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" }
+        }
+      },
+      "Dog": {
+        "type": "object",
+        "required": ["barkVolume"],
+        "properties": {
+          "barkVolume": { "type": "integer" }
+        }
+      },
+      "Owner": {
+        "type": "object",
+        "properties": {
+          "favorite": {
+            "anyOf": [
+              { "\$ref": "#/components/schemas/Cat" },
+              { "\$ref": "#/components/schemas/Dog" }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+''';
+
+const openApiAnyOfResponseYaml = '''
+openapi: 3.0.0
+paths:
+  /pets/search:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                title: PetSearchResponse
+                anyOf:
+                  - \$ref: '#/components/schemas/Cat'
+                  - \$ref: '#/components/schemas/Dog'
+components:
+  schemas:
+    Cat:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+    Dog:
+      type: object
+      required:
+        - barkVolume
+      properties:
+        barkVolume:
+          type: integer
+    Owner:
+      type: object
+      properties:
+        favorite:
+          anyOf:
+            - \$ref: '#/components/schemas/Cat'
+            - \$ref: '#/components/schemas/Dog'
+''';
 
 void main() {
   final generator = SwaggerModelsGeneratorV3(
@@ -640,6 +739,50 @@ void main() {
       );
 
       expect(result, contains('class ModelItemsGet\$Response'));
+    });
+
+    test('Should generate sealed response model for anyOf from JSON schema', () {
+      final map = SwaggerRoot.parse(openApiAnyOfResponseJson);
+      final result = generator.generate(
+        root: map,
+        fileName: 'fileName',
+        allEnums: [],
+      );
+
+      expect(result, contains('sealed class PetSearchResponse'));
+      expect(
+          result, contains('factory PetSearchResponse.fromJson(Object? json)'));
+      expect(result,
+          contains('class PetSearchResponse\$Cat extends PetSearchResponse'));
+      expect(result, contains('final Cat value;'));
+      expect(
+          result,
+          contains(
+              'return PetSearchResponse\$Cat(Cat.fromJson(json as Map<String, dynamic>));'));
+      expect(result,
+          contains('class PetSearchResponse\$Dog extends PetSearchResponse'));
+      expect(result, contains('final Dog value;'));
+      expect(result, contains('Object? toJson() => value.toJson();'));
+      expect(result, contains('final Owner\$Favorite? favorite;'));
+      expect(result, contains('sealed class Owner\$Favorite'));
+    });
+
+    test('Should generate sealed response model for anyOf from YAML schema',
+        () {
+      final yaml = loadYaml(openApiAnyOfResponseYaml) as YamlMap;
+      final map = SwaggerRoot.fromJson(yaml.toMap());
+      final result = generator.generate(
+        root: map,
+        fileName: 'fileName',
+        allEnums: [],
+      );
+
+      expect(result, contains('sealed class PetSearchResponse'));
+      expect(result,
+          contains('class PetSearchResponse\$Cat extends PetSearchResponse'));
+      expect(result,
+          contains('class PetSearchResponse\$Dog extends PetSearchResponse'));
+      expect(result, contains('final Owner\$Favorite? favorite;'));
     });
   });
 

@@ -69,11 +69,7 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
     }
 
     if (schema.anyOf.isNotEmpty) {
-      if (schema.type == kObject) {
-        return 'typedef $className = Map<String, dynamic>;';
-      } else {
-        return 'typedef $className = Object;';
-      }
+      return generateAnyOfSealedClassContent(className, schema);
     }
 
     if (schema.type == 'array') {
@@ -168,7 +164,8 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
           '${getValidatedClassName(classKey)}$itemPart${getValidatedClassName(propertyKey)}',
         );
 
-        if (propSchema.properties.isNotEmpty) {
+        if (propSchema.properties.isNotEmpty ||
+            _shouldGenerateAnyOfClass(propSchema)) {
           result[innerClassName] = propSchema;
         }
 
@@ -222,8 +219,9 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
         final neededSchema = neededResponse?.schema ?? neededResponse?.content?.schema;
 
         if (neededSchema != null &&
-            neededSchema.type == kObject &&
-            neededSchema.properties.isNotEmpty) {
+            ((neededSchema.type == kObject &&
+                    neededSchema.properties.isNotEmpty) ||
+                _shouldGenerateAnyOfClass(neededSchema))) {
           final pathText = key
               .split('/')
               .map((e) => e.replaceAll('}', '').replaceAll('{', ''))
@@ -231,7 +229,9 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
               .join();
           final requestText = operation.pascalCase;
 
-          results['$pathText$requestText\$Response'] = neededSchema;
+          results[neededSchema.title.isNotEmpty
+              ? neededSchema.title
+              : '$pathText$requestText\$Response'] = neededSchema;
         } else if (neededSchema != null &&
             neededSchema.title.isNotEmpty &&
             neededSchema.allOf.isNotEmpty) {
@@ -264,6 +264,225 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
     });
 
     return results;
+  }
+
+  bool _shouldGenerateAnyOfClass(SwaggerSchema schema) {
+    if (schema.anyOf.isEmpty) {
+      return false;
+    }
+
+    return schema.anyOf
+            .where((subSchema) => subSchema.type.toLowerCase() != 'null')
+            .length >
+        1;
+  }
+
+  String generateAnyOfSealedClassContent(
+      String className, SwaggerSchema schema) {
+    final validatedClassName =
+        '${getValidatedClassName(className)}${options.modelPostfix}';
+    final variants = schema.anyOf
+        .where((subSchema) => subSchema.type.toLowerCase() != 'null')
+        .toList();
+
+    if (variants.isEmpty) {
+      return '''
+sealed class $validatedClassName {
+\tconst $validatedClassName();
+
+\tfactory $validatedClassName.fromJson(Object? json) => const ${validatedClassName}Null();
+
+\tObject? toJson();
+
+\tstatic const fromJsonFactory = $validatedClassName.fromJson;
+}
+
+class ${validatedClassName}Null extends $validatedClassName {
+\tconst ${validatedClassName}Null();
+
+\t@override
+\tObject? toJson() => null;
+}
+''';
+    }
+
+    final variantClasses = <String>[];
+    final attempts = <String>[];
+
+    for (var i = 0; i < variants.length; i++) {
+      final variant = variants[i];
+      final typeName = _getAnyOfVariantTypeName(validatedClassName, variant, i);
+      final classVariantName =
+          _getAnyOfVariantClassName(validatedClassName, variant, i);
+      final condition = _getAnyOfJsonCondition(variant);
+      final fromJsonValue = _getAnyOfFromJsonValue(variant);
+      final toJsonValue = _getAnyOfToJsonValue(variant);
+
+      attempts.add('''
+\t\tif ($condition) {
+\t\t\treturn $classVariantName($fromJsonValue);
+\t\t}
+''');
+
+      variantClasses.add('''
+class $classVariantName extends $validatedClassName {
+\tconst $classVariantName(this.value);
+
+\tfinal $typeName value;
+
+\t@override
+\tObject? toJson() => $toJsonValue;
+}
+''');
+    }
+
+    final nullAttempt = schema.anyOf
+            .any((subSchema) => subSchema.type.toLowerCase() == 'null')
+        ? '''
+\t\tif (json == null) {
+\t\t\treturn const ${validatedClassName}Null();
+\t\t}
+'''
+        : '';
+
+    final nullVariant = schema.anyOf
+            .any((subSchema) => subSchema.type.toLowerCase() == 'null')
+        ? '''
+class ${validatedClassName}Null extends $validatedClassName {
+\tconst ${validatedClassName}Null();
+
+\t@override
+\tObject? toJson() => null;
+}
+'''
+        : '';
+
+    return '''
+sealed class $validatedClassName {
+\tconst $validatedClassName();
+
+\tfactory $validatedClassName.fromJson(Object? json) {
+$nullAttempt${attempts.join()}
+\t\tthrow ArgumentError('Could not match anyOf schema for $validatedClassName');
+\t}
+
+\tObject? toJson();
+
+\tstatic const fromJsonFactory = $validatedClassName.fromJson;
+}
+
+${variantClasses.join('\n')}$nullVariant''';
+  }
+
+  String _getAnyOfVariantClassName(
+      String baseClassName, SwaggerSchema schema, int index) {
+    final suffix = schema.ref.isNotEmpty
+        ? schema.ref.getRef()
+        : schema.type == kArray
+            ? 'List'
+            : schema.type.isNotEmpty
+                ? schema.type.pascalCase
+                : 'Variant${index + 1}';
+
+    return getValidatedClassName('$baseClassName\$$suffix');
+  }
+
+  String _getAnyOfVariantTypeName(
+      String baseClassName, SwaggerSchema schema, int index) {
+    if (schema.ref.isNotEmpty) {
+      return getValidatedClassName(schema.ref.getRef())
+          .withPostfix(options.modelPostfix);
+    }
+
+    if (schema.type == kArray) {
+      final items = schema.items;
+      if (items?.ref.isNotEmpty == true) {
+        return getValidatedClassName(items!.ref.getRef())
+            .withPostfix(options.modelPostfix)
+            .asList();
+      }
+
+      if (items?.type.isNotEmpty == true) {
+        return getParameterTypeName(
+                baseClassName, 'value', items, options.modelPostfix, null)
+            .asList();
+      }
+
+      return 'List<Object>';
+    }
+
+    if (schema.properties.isNotEmpty) {
+      return kMapStringDynamic;
+    }
+
+    return getParameterTypeName(baseClassName, 'value${index + 1}', schema,
+        options.modelPostfix, null);
+  }
+
+  String _getAnyOfJsonCondition(SwaggerSchema schema) {
+    if (schema.ref.isNotEmpty ||
+        schema.properties.isNotEmpty ||
+        schema.type == kObject) {
+      return 'json is Map<String, dynamic>';
+    }
+
+    if (schema.type == kArray) {
+      return 'json is List';
+    }
+
+    switch (schema.type) {
+      case 'integer':
+      case 'int':
+      case 'int32':
+      case 'int64':
+        return 'json is int';
+      case 'boolean':
+      case 'bool':
+        return 'json is bool';
+      case 'number':
+        return 'json is num';
+      case 'string':
+        return 'json is String';
+      default:
+        return 'json != null';
+    }
+  }
+
+  String _getAnyOfFromJsonValue(SwaggerSchema schema) {
+    if (schema.ref.isNotEmpty) {
+      final typeName = getValidatedClassName(schema.ref.getRef())
+          .withPostfix(options.modelPostfix);
+      return '$typeName.fromJson(json as Map<String, dynamic>)';
+    }
+
+    if (schema.type == kArray) {
+      final items = schema.items;
+      if (items?.ref.isNotEmpty == true) {
+        final typeName = getValidatedClassName(items!.ref.getRef())
+            .withPostfix(options.modelPostfix);
+        return '(json as List).map((item) => $typeName.fromJson(item as Map<String, dynamic>)).toList()';
+      }
+
+      return 'List.from(json as List)';
+    }
+
+    if (schema.properties.isNotEmpty || schema.type == kObject) {
+      return 'json as Map<String, dynamic>';
+    }
+
+    return 'json';
+  }
+
+  String _getAnyOfToJsonValue(SwaggerSchema schema) {
+    if (schema.ref.isNotEmpty) {
+      return 'value.toJson()';
+    }
+
+    if (schema.type == kArray && schema.items?.ref.isNotEmpty == true) {
+      return 'value.map((item) => item.toJson()).toList()';
+    }
+
+    return 'value';
   }
 
   String generateBase({
@@ -495,7 +714,7 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
 
       result +=
           '''
-class $className implements json.JsonConverter<${value.type}, dynamic> {
+class $className implements json.JsonConverter<${value.type}, String> {
   const $className();
 
   @override
@@ -824,7 +1043,8 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
             : null,
       );
     } else {
-      baseTypeName = kDynamic;
+      baseTypeName =
+          '${getValidatedClassName(className)}\$${getValidatedClassName(propertyKey)}';
       resolvedSchemaForDetails = SwaggerSchema(type: kObject);
     }
 
@@ -1471,10 +1691,6 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
       final basicTypesMap = generateBasicTypesMapFromSchemas(root);
 
       propertyName = getValidatedParameterName(propertyName).asParameterName();
-
-      if (propertyName == 'response') {
-        final a = 0;
-      }
 
       if (propertyName.isEmpty) {
         propertyName = '\$';

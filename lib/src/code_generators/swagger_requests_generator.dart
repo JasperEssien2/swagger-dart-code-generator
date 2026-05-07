@@ -366,6 +366,9 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
       } else if (successResponse.content?.schema?.allOf.isNotEmpty == true &&
           successResponse.content?.schema?.title.isNotEmpty == true) {
         results.add(response);
+      } else if (successResponse.schema?.anyOf.isNotEmpty == true ||
+          successResponse.content?.schema?.anyOf.isNotEmpty == true) {
+        results.add(response);
       }
     }
 
@@ -471,7 +474,7 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
     allModels.toSet().forEach((model) {
       final validatedName = getValidatedClassName(model);
       allModelsString +=
-          'generatedMapping.putIfAbsent($validatedName, () => $validatedName.fromJsonFactory);\n';
+          'generatedMapping.putIfAbsent($validatedName, () => (json) => $validatedName.fromJsonFactory(json));\n';
     });
 
     return Code('$allModelsString\nreturn _$publicMethodName($parametersListString);');
@@ -1138,6 +1141,10 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
         return getValidatedClassName('${ref.getRef()}\$$kResponse$modelPostfix');
       }
 
+      if (neededResponse.anyOf.isNotEmpty) {
+        return getValidatedClassName(ref.getRef() + modelPostfix);
+      }
+
       return getValidatedClassName(ref.getRef() + modelPostfix);
     }
 
@@ -1183,6 +1190,15 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
     }
 
     final contentSchema = content.schema;
+
+    if (contentSchema?.anyOf.isNotEmpty == true) {
+      if (contentSchema!.title.isNotEmpty) {
+        return getValidatedClassName(contentSchema.title).withPostfix(modelPostfix);
+      }
+
+      final requestText = requestName.pascalCase;
+      return getValidatedClassName('$requestText\$Response').withPostfix(modelPostfix);
+    }
 
     if (contentSchema != null &&
         contentSchema.allOf.isNotEmpty == true &&
@@ -1310,6 +1326,14 @@ class SwaggerRequestsGenerator extends SwaggerGeneratorBase {
 
     if (neededResponse.schema?.type == kObject &&
         neededResponse.schema?.properties.isNotEmpty == true) {
+      return _getResponseModelName(path: path, methodName: methodName, modelPostfix: modelPostfix);
+    }
+
+    if (neededResponse.schema?.anyOf.isNotEmpty == true) {
+      if (neededResponse.schema!.title.isNotEmpty) {
+        return getValidatedClassName(neededResponse.schema!.title).withPostfix(modelPostfix);
+      }
+
       return _getResponseModelName(path: path, methodName: methodName, modelPostfix: modelPostfix);
     }
 

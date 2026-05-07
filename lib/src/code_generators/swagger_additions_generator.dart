@@ -37,7 +37,7 @@ class SwaggerAdditionsGenerator extends SwaggerGeneratorBase {
 // coverage:ignore-file
 // ignore_for_file: type=lint
 
-final Map<Type, Object Function(Map<String, dynamic>)> $mappingVariableName = {};
+final Map<Type, Object Function(dynamic)> $mappingVariableName = {};
   """;
   }
 
@@ -159,7 +159,7 @@ String? _dateToJson(DateTime? date) {
       return '';
     }
     return '''
-typedef \$JsonFactory<T> = T Function(Map<String, dynamic> json);
+typedef \$JsonFactory<T> = T Function(dynamic json);
 
 class \$CustomJsonDecoder {
   \$CustomJsonDecoder(this.factories);
@@ -170,6 +170,11 @@ class \$CustomJsonDecoder {
 
     if (entity is Iterable) {
       return _decodeList<T>(entity);
+    }
+
+    final jsonFactory = factories[T];
+    if (jsonFactory != null && jsonFactory is \$JsonFactory<T>) {
+      return jsonFactory(entity);
     }
 
     if (entity is T) {
@@ -185,19 +190,10 @@ class \$CustomJsonDecoder {
     }
 
     if (entity is Map<String, dynamic>) {
-      return _decodeMap<T>(entity);
-    }
-
-    return entity;
-  }
-
-  T _decodeMap<T>(Map<String, dynamic> values) {
-    final jsonFactory = factories[T];
-    if (jsonFactory == null || jsonFactory is! \$JsonFactory<T>) {
       return throw "Could not find factory for type \$T. Is '\$T: \$T.fromJsonFactory' included in the CustomJsonDecoder instance creation in bootstrapper.dart?";
     }
 
-    return jsonFactory(values);
+    return entity;
   }
 
   List<T> _decodeList<T>(Iterable values) =>
