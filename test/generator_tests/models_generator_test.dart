@@ -644,6 +644,52 @@ void main() {
   });
 
   group('Tests for additionalProperties', () {
+    test('Should generate sealed response model for anyOf from JSON schema with discriminator', () {
+      final map = SwaggerRoot.parse('''
+{
+  "openapi": "3.0.0",
+  "components": {
+    "schemas": {
+      "Vehicle": {
+        "anyOf": [
+          { "\$ref": "#/components/schemas/Car" },
+          { "\$ref": "#/components/schemas/Truck" }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "car": "#/components/schemas/Car",
+            "truck": "#/components/schemas/Truck"
+          }
+        }
+      },
+      "Car": {
+        "type": "object"
+      },
+      "Truck": {
+        "type": "object"
+      }
+    }
+  }
+}
+''');
+      final result = generator.generate(
+        root: map,
+        fileName: 'fileName',
+        allEnums: [],
+      );
+
+      expect(result, contains('@JsonSerializable(createFactory: false)\\nsealed class Vehicle {'.replaceAll('\\n', '\n')));
+      expect(result, contains('switch (discriminatorValue) {'));
+      expect(result, contains("case 'car':"));
+      expect(result, contains("return Car.fromJson(json);"));
+      expect(result, contains("case 'truck':"));
+      expect(result, contains("return Truck.fromJson(json);"));
+      expect(result, contains("throw Exception('Could not find mapping for discriminator value: \$discriminatorValue');"));
+      expect(result, contains('class Car implements Vehicle{'));
+      expect(result, contains('class Truck implements Vehicle{'));
+    });
+
     test('Should generate dynamic map type', () {
       final map = SwaggerRoot.parse(objectWithadditionalProperties);
 
@@ -687,10 +733,7 @@ void main() {
           result,
           contains(RegExp(
               r'''@_\$UuidJsonConverter\(\)\s*@JsonKey\(name: 'list', defaultValue: <Uuid>\[\]\)\s*final List<Uuid>\? list;''')));
-      expect(
-          result,
-          contains(
-              'class _\$UuidJsonConverter implements json.JsonConverter<Uuid, String>'));
+      expect(result, contains('class _\$UuidJsonConverter implements json.JsonConverter<Uuid, dynamic>'));
       expect(result, contains('fromJson(json) => Uuid.parse(json);'));
       expect(result, contains('toJson(json) => json.toString();'));
     });
@@ -722,10 +765,7 @@ void main() {
           result,
           contains(RegExp(
               r'''@_\$UuidJsonConverter\(\)\s*@JsonKey\(name: 'id'\)\s*final Uuid\? id;''')));
-      expect(
-          result,
-          contains(
-              'class _\$UuidJsonConverter implements json.JsonConverter<Uuid, String>'));
+      expect(result, contains('class _\$UuidJsonConverter implements json.JsonConverter<Uuid, dynamic>'));
       expect(result, contains('fromJson(json) => customUuidParse(json);'));
       expect(result, contains('toJson(json) => customUuidToString(json);'));
     });

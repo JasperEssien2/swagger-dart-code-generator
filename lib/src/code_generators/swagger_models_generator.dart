@@ -26,6 +26,23 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
 
   String getExtendsString(SwaggerSchema schema);
 
+  String getImplementsString(String className, Map<String, SwaggerSchema> allClasses) {
+    final implementedClasses = <String>[];
+    allClasses.forEach((key, value) {
+      if (value.discriminator != null && (value.anyOf.isNotEmpty || value.oneOf.isNotEmpty)) {
+        final mapping = value.discriminator!.mapping ?? {};
+        final mappedClasses = mapping.values.map((e) => getValidatedClassName(e.split('/').last));
+        if (mappedClasses.contains(className)) {
+          implementedClasses.add(getValidatedClassName(key));
+        }
+      }
+    });
+    if (implementedClasses.isNotEmpty) {
+      return 'implements ${implementedClasses.join(', ')}';
+    }
+    return '';
+  }
+
   List<String> getAllListEnumNames(SwaggerRoot root);
 
   String generateModelClassContent(
@@ -66,6 +83,21 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
 
     if (schema.hasRef) {
       return 'class $className {}';
+    }
+
+    final discriminator = schema.discriminator;
+    if (discriminator != null && (schema.anyOf.isNotEmpty || schema.oneOf.isNotEmpty)) {
+      return generateSealedClassString(
+        root,
+        className,
+        schema,
+        schemas,
+        defaultValues,
+        classesWithNullableLists,
+        allEnumNames,
+        allEnumListNames,
+        allClasses,
+      );
     }
 
     if (schema.anyOf.isNotEmpty) {
@@ -1677,6 +1709,52 @@ static $returnType $fromJsonFunction($valueType? value) => $enumNameCamelCase$fr
     return '{\n$results\n\t}';
   }
 
+  String generateSealedClassString(
+    SwaggerRoot root,
+    String className,
+    SwaggerSchema schema,
+    Map<String, SwaggerSchema> schemas,
+    List<DefaultValueMap> defaultValues,
+    List<String> classesWithNullableLists,
+    List<String> allEnumNames,
+    List<String> allEnumListNames,
+    Map<String, SwaggerSchema> allClasses,
+  ) {
+    final discriminator = schema.discriminator!;
+    final propertyName = discriminator.propertyName;
+    final mapping = discriminator.mapping ?? <String, String>{};
+
+    String cases = '';
+    String defaultFallback = '';
+
+    if (mapping.isNotEmpty) {
+      mapping.forEach((key, value) {
+        final refClassName = getValidatedClassName(value.split('/').last);
+        cases += "      case '$key':\n        return $refClassName.fromJson(json);\n";
+      });
+      defaultFallback = "throw Exception('Could not find mapping for discriminator value: \$discriminatorValue');";
+    } else {
+      defaultFallback = "throw Exception('No mapping for discriminator \$propertyName');";
+    }
+
+    return '''
+@JsonSerializable(createFactory: false)
+sealed class $className {
+  const $className();
+
+  factory $className.fromJson(Map<String, dynamic> json) {
+    final discriminatorValue = json['$propertyName'];
+    switch (discriminatorValue) {
+$cases      default:
+        $defaultFallback
+    }
+  }
+
+  Map<String, dynamic> toJson();
+}
+''';
+  }
+
   String generateModelClassString(
     SwaggerRoot root,
     String className,
@@ -1734,11 +1812,22 @@ String toString() => jsonEncode(this);
     final toJson = generateToJson(schema, validatedClassName);
 
     final createToJson = generateCreateToJson(schema, validatedClassName);
+    final extendsString = getExtendsString(schema);
+    final implementsString = getImplementsString(validatedClassName, allClasses);
+    
+    String classDeclaration = 'class $validatedClassName';
+    if (extendsString.isNotEmpty) {
+      classDeclaration += ' $extendsString';
+    }
+    if (implementsString.isNotEmpty) {
+      classDeclaration += ' $implementsString';
+    }
+    classDeclaration += '{';
 
     final generatedClass =
         '''
 @JsonSerializable(explicitToJson: true $createToJson)
-class $validatedClassName{
+$classDeclaration
 \tconst $validatedClassName($generatedConstructorProperties);\n
 \t$fromJson\n
 \t$toJson\n

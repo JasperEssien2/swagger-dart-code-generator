@@ -132,6 +132,9 @@ class SwaggerSchema {
   @JsonKey(name: 'additionalProperties', fromJson: _additionalsFromJson)
   bool hasAdditionalProperties;
 
+  @JsonKey(name: 'discriminator')
+  SwaggerDiscriminator? discriminator;
+
   List<String>? enumNames;
 
   factory SwaggerSchema.fromJson(Map<String, dynamic> json) =>
@@ -183,4 +186,21 @@ class MsEnumValue {
 
   factory MsEnumValue.fromJson(Map<String, dynamic> json) =>
       _$MsEnumValueFromJson(json);
+}
+
+@JsonSerializable()
+class SwaggerDiscriminator {
+  @JsonKey(name: 'propertyName')
+  String propertyName;
+  @JsonKey(name: 'mapping')
+  Map<String, String>? mapping;
+
+  SwaggerDiscriminator({
+    this.propertyName = '',
+    this.mapping,
+  });
+
+  factory SwaggerDiscriminator.fromJson(Map<String, dynamic> json) =>
+      _$SwaggerDiscriminatorFromJson(json);
+  Map<String, dynamic> toJson() => _$SwaggerDiscriminatorToJson(this);
 }
