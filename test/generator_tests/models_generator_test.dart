@@ -1,3 +1,4 @@
+import 'package:swagger_dart_code_generator/src/code_generators/enum_model.dart';
 import 'package:swagger_dart_code_generator/src/extensions/yaml_extensions.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/v2/swagger_models_generator_v2.dart';
 import 'package:swagger_dart_code_generator/src/code_generators/v3/swagger_models_generator_v3.dart';
@@ -104,6 +105,37 @@ components:
           anyOf:
             - \$ref: '#/components/schemas/Cat'
             - \$ref: '#/components/schemas/Dog'
+''';
+
+const openApiAnyOfWithEnumRefJson = '''
+{
+  "openapi": "3.0.0",
+  "paths": {},
+  "components": {
+    "schemas": {
+      "SensationType": {
+        "type": "string",
+        "enum": ["sharp", "dull", "burning"]
+      },
+      "BodyAreaSymptom": {
+        "type": "object",
+        "properties": {
+          "sensationType": {
+            "anyOf": [
+              { "\$ref": "#/components/schemas/SensationType" },
+              {
+                "type": "object",
+                "properties": {
+                  "custom": { "type": "string" }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
 ''';
 
 void main() {
@@ -783,6 +815,36 @@ void main() {
       expect(result,
           contains('class PetSearchResponse\$Dog extends PetSearchResponse'));
       expect(result, contains('final Owner\$Favorite? favorite;'));
+    });
+
+    test(
+        'Should prefix anyOf enum-ref variants with "enums." and call enum (de)serialization helpers',
+        () {
+      final map = SwaggerRoot.parse(openApiAnyOfWithEnumRefJson);
+      final allEnums = const [
+        EnumModel(
+          name: 'SensationType',
+          values: ['sharp', 'dull', 'burning'],
+          isInteger: false,
+          enumNames: [],
+        ),
+      ];
+      final result = generator.generate(
+        root: map,
+        fileName: 'fileName',
+        allEnums: allEnums,
+      );
+
+      // Field type uses the enums. prefix.
+      expect(result, contains('final enums.SensationType value;'));
+      // No bare (un-prefixed) SensationType references in the field/factory body.
+      expect(result, isNot(contains('final SensationType value;')));
+      expect(
+          result, isNot(contains('SensationType.fromJson(json as Map')));
+      // Branch dispatch uses the enum's String discriminator and helpers.
+      expect(result, contains('if (json is String)'));
+      expect(result, contains('sensationTypeFromJson(json)'));
+      expect(result, contains('sensationTypeToJson(value)'));
     });
   });
 
