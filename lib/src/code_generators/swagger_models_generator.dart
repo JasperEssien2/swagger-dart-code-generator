@@ -69,7 +69,12 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
     }
 
     if (schema.anyOf.isNotEmpty) {
-      return generateAnyOfSealedClassContent(className, schema);
+      return generateAnyOfSealedClassContent(
+        className,
+        schema,
+        allEnumNames: allEnumNames,
+        allClasses: allClasses,
+      );
     }
 
     if (schema.type == 'array') {
@@ -278,7 +283,11 @@ abstract class SwaggerModelsGenerator extends SwaggerGeneratorBase {
   }
 
   String generateAnyOfSealedClassContent(
-      String className, SwaggerSchema schema) {
+    String className,
+    SwaggerSchema schema, {
+    List<String> allEnumNames = const [],
+    Map<String, SwaggerSchema> allClasses = const {},
+  }) {
     final validatedClassName =
         '${getValidatedClassName(className)}${options.modelPostfix}';
     final variants = schema.anyOf
@@ -311,12 +320,13 @@ class ${validatedClassName}Null extends $validatedClassName {
 
     for (var i = 0; i < variants.length; i++) {
       final variant = variants[i];
-      final typeName = _getAnyOfVariantTypeName(validatedClassName, variant, i);
+      final typeName = _getAnyOfVariantTypeName(
+          validatedClassName, variant, i, allEnumNames);
       final classVariantName =
           _getAnyOfVariantClassName(validatedClassName, variant, i);
-      final condition = _getAnyOfJsonCondition(variant);
-      final fromJsonValue = _getAnyOfFromJsonValue(variant);
-      final toJsonValue = _getAnyOfToJsonValue(variant);
+      final condition = _getAnyOfJsonCondition(variant, allClasses);
+      final fromJsonValue = _getAnyOfFromJsonValue(variant, allEnumNames);
+      final toJsonValue = _getAnyOfToJsonValue(variant, allEnumNames);
 
       attempts.add('''
 \t\tif ($condition) {
@@ -387,19 +397,24 @@ ${variantClasses.join('\n')}$nullVariant''';
     return getValidatedClassName('$baseClassName\$$suffix');
   }
 
-  String _getAnyOfVariantTypeName(
-      String baseClassName, SwaggerSchema schema, int index) {
+  String _getAnyOfVariantTypeName(String baseClassName, SwaggerSchema schema,
+      int index, List<String> allEnumNames) {
     if (schema.ref.isNotEmpty) {
-      return getValidatedClassName(schema.ref.getRef())
-          .withPostfix(options.modelPostfix);
+      final refName = getValidatedClassName(schema.ref.getRef());
+      if (_isEnumRefName(refName, allEnumNames)) {
+        return 'enums.$refName';
+      }
+      return refName.withPostfix(options.modelPostfix);
     }
 
     if (schema.type == kArray) {
       final items = schema.items;
       if (items?.ref.isNotEmpty == true) {
-        return getValidatedClassName(items!.ref.getRef())
-            .withPostfix(options.modelPostfix)
-            .asList();
+        final itemRef = getValidatedClassName(items!.ref.getRef());
+        if (_isEnumRefName(itemRef, allEnumNames)) {
+          return 'enums.$itemRef'.asList();
+        }
+        return itemRef.withPostfix(options.modelPostfix).asList();
       }
 
       if (items?.type.isNotEmpty == true) {
@@ -419,10 +434,20 @@ ${variantClasses.join('\n')}$nullVariant''';
         options.modelPostfix, null);
   }
 
-  String _getAnyOfJsonCondition(SwaggerSchema schema) {
-    if (schema.ref.isNotEmpty ||
-        schema.properties.isNotEmpty ||
-        schema.type == kObject) {
+  String _getAnyOfJsonCondition(
+      SwaggerSchema schema, Map<String, SwaggerSchema> allClasses) {
+    if (schema.ref.isNotEmpty) {
+      final refName = getValidatedClassName(schema.ref.getRef());
+      final target = allClasses[refName];
+      if (target?.isEnum == true) {
+        return kIntegerTypes.contains(target!.type)
+            ? 'json is int'
+            : 'json is String';
+      }
+      return 'json is Map<String, dynamic>';
+    }
+
+    if (schema.properties.isNotEmpty || schema.type == kObject) {
       return 'json is Map<String, dynamic>';
     }
 
@@ -448,18 +473,25 @@ ${variantClasses.join('\n')}$nullVariant''';
     }
   }
 
-  String _getAnyOfFromJsonValue(SwaggerSchema schema) {
+  String _getAnyOfFromJsonValue(
+      SwaggerSchema schema, List<String> allEnumNames) {
     if (schema.ref.isNotEmpty) {
-      final typeName = getValidatedClassName(schema.ref.getRef())
-          .withPostfix(options.modelPostfix);
+      final refName = getValidatedClassName(schema.ref.getRef());
+      if (_isEnumRefName(refName, allEnumNames)) {
+        return '${refName.camelCase}FromJson(json)';
+      }
+      final typeName = refName.withPostfix(options.modelPostfix);
       return '$typeName.fromJson(json as Map<String, dynamic>)';
     }
 
     if (schema.type == kArray) {
       final items = schema.items;
       if (items?.ref.isNotEmpty == true) {
-        final typeName = getValidatedClassName(items!.ref.getRef())
-            .withPostfix(options.modelPostfix);
+        final itemRef = getValidatedClassName(items!.ref.getRef());
+        if (_isEnumRefName(itemRef, allEnumNames)) {
+          return '(json as List).map((item) => ${itemRef.camelCase}FromJson(item)).toList()';
+        }
+        final typeName = itemRef.withPostfix(options.modelPostfix);
         return '(json as List).map((item) => $typeName.fromJson(item as Map<String, dynamic>)).toList()';
       }
 
@@ -473,16 +505,31 @@ ${variantClasses.join('\n')}$nullVariant''';
     return 'json';
   }
 
-  String _getAnyOfToJsonValue(SwaggerSchema schema) {
+  String _getAnyOfToJsonValue(
+      SwaggerSchema schema, List<String> allEnumNames) {
     if (schema.ref.isNotEmpty) {
+      final refName = getValidatedClassName(schema.ref.getRef());
+      if (_isEnumRefName(refName, allEnumNames)) {
+        return '${refName.camelCase}ToJson(value)';
+      }
       return 'value.toJson()';
     }
 
     if (schema.type == kArray && schema.items?.ref.isNotEmpty == true) {
+      final itemRef = getValidatedClassName(schema.items!.ref.getRef());
+      if (_isEnumRefName(itemRef, allEnumNames)) {
+        return '${itemRef.camelCase}ListToJson(value)';
+      }
       return 'value.map((item) => item.toJson()).toList()';
     }
 
     return 'value';
+  }
+
+  bool _isEnumRefName(String refName, List<String> allEnumNames) {
+    if (refName.isEmpty) return false;
+    return allEnumNames.contains(refName) ||
+        allEnumNames.contains('enums.$refName');
   }
 
   String generateBase({
